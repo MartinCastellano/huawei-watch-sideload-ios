@@ -18,6 +18,7 @@ WatchApps/*
 build/
 **/build/
 DerivedData/
+.build/
 HuaSideload.xcodeproj/
 HuaSideload/Info.plist
 node_modules/
