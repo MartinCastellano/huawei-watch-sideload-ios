@@ -36,6 +36,15 @@ final class WatchLink: NSObject, ObservableObject {
     @Published private(set) var log: [LogEntry] = []
     @Published private(set) var watchAppProgress: Double?
     @Published private(set) var installedApps: [WatchApps.Installed] = []
+    // The list above was read from the watch on this connection (empty then means: no apps)
+    @Published private(set) var installedAppsLoaded = false
+    // Asked once per connection when the Install tab opens; a watch that can't list apps is not asked again
+    private var installedAppsRequested = false
+    // The app being installed or removed right now, for its row on the Install tab
+    @Published private(set) var installingPackage: String?
+    @Published private(set) var removingPackage: String?
+    // Watch apps added from Files (ImportedWatchApps)
+    @Published private(set) var importedApps: [BundledWatchApp] = ImportedWatchApps.load()
     @Published private(set) var watchUDID: String?
     // Identity details (UDID, serial number, MAC) stay hidden on screen and in the log, e.g. while filming
     @Published var revealIdentity = false
@@ -109,7 +118,7 @@ final class WatchLink: NSObject, ObservableObject {
         session.onWatchFaceConfirm = { [weak self] report in self?.watchFaceConfirmed(report) }
         session.onAppInstallStatus = { [weak self] status, package in
             let kind: LogKind = status == 102 ? .success : (status == 103 || status == 106 ? .error : .info)
-            self?.append(kind, "⌚ Saat: \(WatchApps.describeStatus(status)) \(package)")
+            self?.append(kind, L("⌚ Watch: ", "⌚ Saat: ") + "\(WatchApps.describeStatus(status)) \(package)")
             self?.lastInstallStatus = status
         }
         session.onAppMessage = { [weak self] source, data in
@@ -308,6 +317,11 @@ final class WatchLink: NSObject, ObservableObject {
         connectedName = nil
         battery = nil
         watchInfo = []
+        installedApps = []
+        installedAppsLoaded = false
+        installedAppsRequested = false
+        appInstallStatus = nil
+        musicStorage = nil
         servicesAwaitingCharacteristics = 0
         parser.reset()
         session.reset()
@@ -582,35 +596,95 @@ final class WatchLink: NSObject, ObservableObject {
         return (title, artist)
     }
 
+    func loadInstalledAppsOnce() {
+        guard isPaired, !installedAppsRequested, busy == nil else { return }
+        loadInstalledApps()
+    }
+
     func loadInstalledApps() {
+        installedAppsRequested = true
         run(L("Reading the apps on the watch…", "Saatteki uygulamalar okunuyor…")) { session in
             self.installedApps = try await session.installedApps()
+            self.installedAppsLoaded = true
         }
     }
 
-    func deleteWatchApp(_ app: WatchApps.Installed) {
-        run("\(app.name.isEmpty ? app.package : app.name) siliniyor…") { session in
-            try await session.deleteApp(app.package)
-            try? await Task.sleep(for: .seconds(1))
-            let apps = try await session.installedApps()
-            self.installedApps = apps
-            let gone = !apps.contains { $0.package == app.package }
-            self.append(gone ? .success : .error, gone ? L("Removed from the watch: \(app.name)", "Saatten silindi: \(app.name)")
-                        : L("The watch did not remove \(app.name)", "Saat \(app.name) uygulamasını silmedi"))
+    // Removes an app by its package name. Works for apps the watch's list doesn't show too: the watch answers
+    // with 0x2A/0x02 status 105 (removed) or 106 (failed), and the list is read again afterwards.
+    func deleteWatchApp(package: String, name: String? = nil) {
+        let package = package.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !package.isEmpty, busy == nil else { return }
+        let title = (name?.isEmpty == false ? name : nil) ?? package
+        removingPackage = package
+        appInstallStatus = AppInstallStatus(text: L("Removing \(title)…", "\(title) kaldırılıyor…"), ok: nil)
+        run(L("Removing \(title)…", "\(title) kaldırılıyor…")) { session in
+            defer {
+                self.removingPackage = nil
+                if self.appInstallStatus?.ok == nil {
+                    self.appInstallStatus = AppInstallStatus(text: L("\(title) could not be removed", "\(title) kaldırılamadı"), ok: false)
+                }
+            }
+            self.lastInstallStatus = nil
+            try await session.deleteApp(package)
+            for _ in 0..<10 where self.lastInstallStatus != 105 && self.lastInstallStatus != 106 {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            let apps = try? await session.installedApps()
+            if let apps {
+                self.installedApps = apps
+                self.installedAppsLoaded = true
+            }
+            let stillThere = apps?.contains { $0.package == package } ?? false
+            if self.lastInstallStatus == 106 || stillThere {
+                self.append(.error, L("The watch did not remove \(title)", "Saat \(title) uygulamasını kaldırmadı"))
+                self.appInstallStatus = AppInstallStatus(text: L("The watch did not remove \(title)", "Saat \(title) uygulamasını kaldırmadı"), ok: false,
+                                                         hint: L("Check the package name (bundleName in config.json).",
+                                                                 "Paket adını kontrol et (config.json'daki bundleName)."))
+            } else {
+                self.append(.success, L("Removed from the watch: \(title)", "Saatten kaldırıldı: \(title)"))
+                self.appInstallStatus = AppInstallStatus(text: L("\(title) removed from the watch", "\(title) saatten kaldırıldı"), ok: true)
+            }
         }
     }
 
-    // Short result line for the screen (filming mode shows it instead of the log): ok nil = in progress
-    struct AppInstallStatus { let text: String; let ok: Bool? }
+    // A signed .bin picked in Files: kept in the app's list and installed right away
+    func importWatchApp(_ url: URL) {
+        guard busy == nil else { return }
+        do {
+            let app = try ImportedWatchApps.add(url)
+            importedApps = ImportedWatchApps.load()
+            append(.info, L("Added from Files: \(app.name) (\(app.package) \(app.version))", "Dosyalardan eklendi: \(app.name) (\(app.package) \(app.version))"))
+            installWatchApp(importedApps.first { $0.package == app.package } ?? app)
+        } catch {
+            append(.error, error.localizedDescription)
+            appInstallStatus = AppInstallStatus(text: error.localizedDescription, ok: false)
+        }
+    }
+
+    // Takes an imported app off the phone's list (the watch keeps it if it is installed)
+    func forgetImportedApp(_ app: BundledWatchApp) {
+        ImportedWatchApps.remove(app)
+        importedApps = ImportedWatchApps.load()
+    }
+
+    // Short result line for the screen: ok nil = in progress
+    struct AppInstallStatus {
+        let text: String
+        let ok: Bool?
+        var hint: String? = nil
+    }
     @Published private(set) var appInstallStatus: AppInstallStatus?
 
     // Installs a signed watch app bundled in the iPhone app (WatchApps/*.bin) on the watch
     func installWatchApp(_ app: BundledWatchApp) {
+        guard busy == nil else { return }
         watchAppProgress = 0
+        installingPackage = app.package
         appInstallStatus = AppInstallStatus(text: L("Sending \(app.name) to the watch…", "\(app.name) saate gönderiliyor…"), ok: nil)
         run(L("Installing \(app.name) on the watch…", "\(app.name) saate yükleniyor…")) { session in
             defer {
                 self.watchAppProgress = nil
+                self.installingPackage = nil
                 if self.appInstallStatus?.ok == nil {
                     self.appInstallStatus = AppInstallStatus(text: L("\(app.name) could not be installed", "\(app.name) kurulamadı"), ok: false)
                 }
@@ -631,17 +705,23 @@ final class WatchLink: NSObject, ObservableObject {
             }
             if let apps = try? await session.installedApps() {
                 self.installedApps = apps
+                self.installedAppsLoaded = true
                 let mine = apps.contains { $0.package == app.package }
                 self.append(mine ? .success : .error, mine ? L("\(app.name) is installed on the watch 🎉", "\(app.name) saatte kurulu 🎉")
                             : L("\(app.name) is not on the watch. For error 103 see README > Troubleshooting",
                                 "\(app.name) saatin listesinde yok. 103 hatası için README > Troubleshooting"))
                 // 103 wins: an older build of the same package may still be on the watch
+                let why103 = L("Usually the signing profile doesn't contain this watch's UDID, or version.code is not higher than the installed one.",
+                               "Genelde imza profilinde bu saatin UDID'si yoktur ya da version.code kurulu sürümden büyük değildir.")
                 if self.lastInstallStatus == 103 {
-                    self.appInstallStatus = AppInstallStatus(text: L("The watch rejected \(app.name): 103", "Saat \(app.name) uygulamasını reddetti: 103"), ok: false)
+                    self.appInstallStatus = AppInstallStatus(text: L("The watch rejected \(app.name) (103)", "Saat \(app.name) uygulamasını reddetti (103)"), ok: false, hint: why103)
                 } else {
-                    self.appInstallStatus = mine ? AppInstallStatus(text: L("\(app.name) installed ✓", "\(app.name) kuruldu ✓"), ok: true)
-                        : AppInstallStatus(text: L("\(app.name) could not be installed", "\(app.name) kurulamadı"), ok: false)
+                    self.appInstallStatus = mine ? AppInstallStatus(text: L("\(app.name) installed", "\(app.name) kuruldu"), ok: true)
+                        : AppInstallStatus(text: L("\(app.name) could not be installed", "\(app.name) kurulamadı"), ok: false, hint: why103)
                 }
+            } else if self.lastInstallStatus == 102 {
+                // The list could not be read, but the watch reported the install itself
+                self.appInstallStatus = AppInstallStatus(text: L("\(app.name) installed", "\(app.name) kuruldu"), ok: true)
             }
         }
     }
@@ -927,7 +1007,7 @@ final class WatchLink: NSObject, ObservableObject {
 extension WatchLink: WatchFeatureHost {
     func bridge(for package: String) -> WatchAppBridge? {
         if let bridge = bridges[package] { return bridge }
-        guard let fingerprint = WatchAppCatalog.app(for: package)?.fingerprint else { return nil }
+        guard let fingerprint = (WatchAppCatalog.app(for: package) ?? importedApps.first { $0.package == package })?.fingerprint else { return nil }
         let bridge = WatchAppBridge(session: session, watchPackage: package, watchFingerprint: fingerprint,
                                     log: { [weak self] kind, text in self?.append(kind, text) })
         bridge.onMessage = { [weak self] message in self?.route(message, from: package) }

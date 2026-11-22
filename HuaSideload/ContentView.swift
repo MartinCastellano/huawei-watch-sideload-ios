@@ -9,8 +9,6 @@ struct ContentView: View {
     @State private var copied = false
     @State private var message = ""
     @FocusState private var messageFocused: Bool
-    @State private var pickingMusic = false
-    @State private var pickingWatchFace = false
     // Filming mode: only what a video needs (no log controls, no feature sections, no identity buttons).
     // Offered only when a feature asks for it (WatchFeature.offersFilmMode); the plain app never shows it.
     @AppStorage("filmModeV2") private var filmModeOn = false
@@ -18,7 +16,6 @@ struct ContentView: View {
     // Kept in the Keychain (CredentialStore), not in UserDefaults
     @State private var huaweiAccountId = CredentialStore.shared.string(CredentialStore.huaweiAccountKey) ?? ""
     @AppStorage(WatchLink.pairingSetupKey) private var sendsPairingSetup = false
-    @AppStorage(WatchFaceUploadMethod.storageKey) private var faceUploadMethod = WatchFaceUploadMethod.bin.rawValue
     @State private var confirmingFirstPairing = false
     private var filmModeOffered: Bool { link.features.contains { $0.offersFilmMode } }
     private var filmMode: Bool { filmModeOffered && filmModeOn }
@@ -50,9 +47,8 @@ struct ContentView: View {
 
             page(L("Install", "Yükle")) {
                 if link.isPaired {
-                    watchAppsSection
-                    watchFaceSection
-                    if !filmMode { musicSection }
+                    InstallTab(link: link, filmMode: filmMode,
+                               hiddenApps: filmMode ? Set(link.features.flatMap(\.filmModeHiddenApps)) : [])
                 } else {
                     pairFirstSection
                 }
@@ -243,128 +239,6 @@ struct ContentView: View {
                 Text(L("Close Huawei Health before pairing (swipe it up in the app switcher). The watch may ask for confirmation the first time. A watch set up with Huawei Health may still be tied to that Huawei account: if it reports \"Pairing failed\", turn on \"Send setup after pairing\", enter the account ID (the userId cookie on cloud.huawei.com, see Gadgetbridge's Huawei pairing guide) and pair again.",
                        "Eşleşmeden önce Huawei Health'i kapat (uygulama değiştiriciden yukarı kaydır). İlk eşleşmede saatin ekranında onay çıkabilir. Huawei Health ile kurulan saat o Huawei hesabına bağlı kalabilir: saat \"Eşleşme başarısız\" derse \"Eşleşmeden sonra kurulum gönder\"i aç, hesap ID'sini gir (cloud.huawei.com'daki userId çerezi, Gadgetbridge'in Huawei eşleşme rehberine bak) ve tekrar eşleş."))
             }
-        }
-    }
-
-    private var visibleApps: [BundledWatchApp] {
-        guard filmMode else { return WatchAppCatalog.all }
-        let hidden = Set(link.features.flatMap(\.filmModeHiddenApps))
-        return WatchAppCatalog.all.filter { !hidden.contains($0.name) }
-    }
-
-    private var watchAppsSection: some View {
-        Section {
-            if let progress = link.watchAppProgress {
-                ProgressView(value: progress) { Text(L("Uploading… \(Int(progress * 100))%", "Yükleniyor… %\(Int(progress * 100))")) }
-            }
-            if filmMode, let status = link.appInstallStatus, link.watchAppProgress == nil {
-                Label(status.text, systemImage: status.ok == true ? "checkmark.circle.fill" : status.ok == false ? "xmark.octagon.fill" : "hourglass")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(status.ok == true ? .green : status.ok == false ? .red : .secondary)
-            }
-            ForEach(visibleApps) { app in
-                Button { link.installWatchApp(app) } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L("Install \(app.name) on the watch", "\(app.name) uygulamasını saate kur")).fontWeight(.semibold)
-                        Text("\(app.version) · \(app.data.count / 1024) KB").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .disabled(link.busy != nil)
-            }
-            ForEach(link.installedApps) { app in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(app.name.isEmpty ? app.package : app.name)
-                        Text("\(app.package) · \(app.version)").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(L("Delete", "Sil"), role: .destructive) { link.deleteWatchApp(app) }
-                        .buttonStyle(.borderless)
-                        .disabled(link.busy != nil)
-                }
-            }
-            Button(L("Show apps on the watch", "Saatteki uygulamaları göster")) { link.loadInstalledApps() }
-                .disabled(link.busy != nil)
-        } header: {
-            Text(L("Watch apps", "Saat uygulamaları"))
-        } footer: {
-            if WatchAppCatalog.all.isEmpty && !filmMode {
-                Text(L("No watch app is bundled yet. Apps built with tools/build-watch-app.sh land in WatchApps/ and show up here with an \"Install\" button (see README).",
-                       "Uygulamanın içinde saat uygulaması yok. tools/build-watch-app.sh ile derlenen .bin dosyaları WatchApps/ klasörüne düşer ve burada \"Kur\" düğmesi olarak çıkar (README)."))
-            }
-        }
-    }
-
-    private var watchFaceSection: some View {
-        Section {
-            if let status = link.watchFaceStatus {
-                if let progress = link.watchAppProgress {
-                    ProgressView(value: progress) { Text(status + " " + L("\(Int(progress * 100))%", "%\(Int(progress * 100))")).font(.callout) }
-                } else {
-                    Text(status).font(.callout)
-                }
-            }
-            if let compatibility = link.watchFaceCompatibility, link.watchFaceStage != .idle {
-                Text(compatibility.label).font(.footnote).foregroundStyle(compatibility.blocksInstall ? .red : .secondary)
-            }
-            ForEach(WatchFaceCatalog.all, id: \.self) { url in
-                let name = url.deletingPathExtension().lastPathComponent
-                let compatibility = WatchFaceCompatibility.evaluate(screenCode: WatchFaceCatalog.screens[url] ?? "?", device: link.watchFaceParams)
-                VStack(alignment: .leading, spacing: 2) {
-                    Button(L("Install the \(name) watch face", "\(name) kadranını saate kur")) { link.installWatchFace(url, title: name) }
-                        .disabled(link.busy != nil || compatibility.blocksInstall)
-                        .fontWeight(.semibold)
-                    if link.watchFaceParams != nil {
-                        Text(compatibility.label).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if !filmMode {
-                Button(L("Install a watch face (.hwt)", "Saate kadran yükle (.hwt)")) { pickingWatchFace = true }
-                    .disabled(link.busy != nil)
-                    .fontWeight(WatchFaceCatalog.all.isEmpty ? .semibold : .regular)
-                // Newer watches may want the face in another form; nothing tells which, so it is a setting to try
-                Picker(L("Upload method", "Yükleme yöntemi"), selection: $faceUploadMethod) {
-                    ForEach(WatchFaceUploadMethod.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                .disabled(link.busy != nil)
-            }
-        } header: {
-            Text(L("Watch faces", "Kadranlar"))
-        } footer: {
-            if !filmMode {
-                Text(L("Watch faces made with Huawei Theme Studio (.hwt) for this watch's screen. The app checks the package's screen against the watch first, then shows each stage: transferred, confirmed by the watch, installed (in the watch's list), active. The two bundled faces are made for 466×466 round screens.",
-                       "Bu saatin ekranı için Huawei Theme Studio ile yapılan kadranlar (.hwt). Uygulama önce paketin ekranını saatle karşılaştırır, sonra her aşamayı gösterir: aktarıldı, saat onayladı, kuruldu (saatin listesinde), etkin. Gelen iki kadran 466×466 yuvarlak ekranlar içindir."))
-            }
-        }
-        .fileImporter(isPresented: $pickingWatchFace, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first { link.installWatchFace(url) }
-        }
-    }
-
-    private var musicSection: some View {
-        Section {
-            if let status = link.musicUploadStatus {
-                Text(status).font(.callout)
-            }
-            Button(L("Upload music to the watch", "Saate müzik yükle")) { pickingMusic = true }
-                .disabled(link.busy != nil)
-                .fontWeight(.semibold)
-            if let storage = link.musicStorage {
-                LabeledContent(L("On the watch", "Saatte"),
-                               value: L("\(storage.songs)/\(storage.maxSongs) songs · \(storage.freeMB) MB free",
-                                        "\(storage.songs)/\(storage.maxSongs) şarkı · \(storage.freeMB) MB boş"))
-            }
-            Button(L("Show the watch's music storage", "Saatin müzik hafızasını göster")) { link.loadMusicStorage() }
-                .disabled(link.busy != nil)
-        } header: {
-            Text(L("Watch music player", "Saatin müzik çaları"))
-        } footer: {
-            Text(L("MP3, M4A, AAC, FLAC, WAV or OPUS files go to the watch's storage and play from the watch's own Music app without the phone. DRM-protected songs (Spotify, Apple Music) cannot be uploaded. Large files take a few minutes.",
-                   "MP3, M4A, AAC, FLAC, WAV ya da OPUS dosyaları saatin hafızasına gider; saatin kendi Müzik uygulamasından telefonsuz çalınır. DRM'li (Spotify, Apple Music) şarkılar yüklenemez. Büyük dosyalar birkaç dakika sürer."))
-        }
-        .fileImporter(isPresented: $pickingMusic, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { link.uploadMusic(urls) }
         }
     }
 

@@ -82,11 +82,18 @@ cp -R watch-apps/sample watch-apps/my-app
 
 ```bash
 tools/build-watch-app.sh watch-apps/my-app     # → WatchApps/My App.bin  (file name = app_name)
-./generate.sh                                  # adds the new .bin to the Xcode project
 ```
-1. Run the iPhone app from Xcode again.
-2. **Install** tab → **Watch apps** → **"Install … on the watch"**.
-3. When it's done the app appears in the watch's app list. To remove it: **Show apps on the watch** → **Delete**.
+
+**Without rebuilding the iPhone app** (works with the prebuilt IPA too): copy the `.bin` to the iPhone (AirDrop,
+iCloud Drive…), then **Install** tab → **Watch apps** → **Install from Files (.bin)…**. The app stays in that list
+for later installs; swipe left to take it off.
+
+**Bundled into the iPhone app:** `./generate.sh` adds every `.bin` in `WatchApps/` to the Xcode project; run the
+iPhone app from Xcode again and the app shows up under **Watch apps** with an **Install** button.
+
+The **On the watch** list below it shows what is installed, with the version. A newer build of an installed app
+gets an **Update** button. To remove an app, tap its trash icon or swipe left; an app the list doesn't show can be
+removed with **Remove by package name…** (the `bundleName` from `config.json`).
 
 At the end `build-watch-app.sh` checks the package against the watch installer's rules with
 `tools/check-watch-bin.py`. If it says "WILL NOT INSTALL", the reason is printed right there.
@@ -221,7 +228,8 @@ Fixes to the core then reach both projects automatically.
 
 Pairing and watch face problems are in the [README's troubleshooting](../README.md#5-troubleshooting).
 
-- **Install fails with 103:** see the table in section 3. Start with `python3 tools/check-watch-bin.py WatchApps/X.bin`.
+- **Install fails with 103:** see the table in section 3. The app's status card shows the most common causes.
+- **An app is on the watch but not in "On the watch":** remove it with **Remove by package name…** on the Install tab. Start with `python3 tools/check-watch-bin.py WatchApps/X.bin`.
 - **"Could not reach the phone (is HuaSideload open?)":** the iPhone app must be running and connected to the watch. It also works in the background, but not after you force-quit it.
 - **Live log on a Mac** (unlock the iPhone first; every line starts with `[HuaSideload]`):
   ```bash

@@ -53,7 +53,8 @@ implementation. The app UI is available in **English and Turkish** (globe menu, 
 - Battery and watch info, notifications to the watch
 - **Installs custom watch faces** (any `.hwt`, e.g. from Huawei Theme Studio); no debug profile needed, two
   ready-made faces are bundled (section 4.6)
-- **Installs and removes your own watch apps** (signed `.bin` with a debug profile)
+- **Installs, updates and removes your own watch apps** (signed `.bin` with a debug profile, picked from Files; no
+  rebuild of the iPhone app needed)
 - Comes with three games to build for your watch: **Dino, Flappy, Snake** ([developer guide](docs/DEVELOPMENT.md#25-ready-made-games-dino-flappy-snake))
 - Uploads **MP3/M4A/AAC/FLAC/WAV/OPUS** to the watch's own music player (to listen without the phone)
 - **JSON messaging** between your watch apps and the phone (Wear Engine P2P)
@@ -175,7 +176,7 @@ Good to know:
 ### 4.6 Watch faces
 
 Watch faces don't need a debug profile. Every `.hwt` in `WatchFaces/` is bundled into the iPhone app and shows up
-on the **Install** tab under **Watch faces** with an install button; **Install a watch face (.hwt)** uploads any other `.hwt` file.
+on the **Install** tab under **Watch faces** with a preview and an **Install** button; **Install from Files (.hwt)…** uploads any other `.hwt` file.
 After the upload, touch and hold the watch face on the watch and pick the new one.
 
 **Newer watches and bands (e.g. Band 11, GT 4) reject the upload with error 100004** until the phone tells them the Huawei

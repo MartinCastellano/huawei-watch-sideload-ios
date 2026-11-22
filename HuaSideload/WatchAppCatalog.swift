@@ -5,13 +5,17 @@ import Security
 // tools/build-watch-app.sh writes every app there as "<app name>.bin"; no code per app is needed.
 struct BundledWatchApp: Identifiable {
     // file name, not package: two builds of the same package (e.g. a test variant) can sit side by side
-    var id: String { name }
+    var id: String { (imported ? "imported/" : "") + name }
     let name: String
     let package: String
     let version: String
     let data: [UInt8]
     // Identity needed for P2P messaging with the watch app (appverify GetAppid)
     let fingerprint: String?
+    // Launcher icon from the package: the source PNG, or the converted raw image when the PNG is missing
+    var icon: [UInt8]? = nil
+    // Added from Files on the phone (ImportedWatchApps), not built into the iPhone app
+    var imported = false
 }
 
 enum WatchAppCatalog {
@@ -37,6 +41,8 @@ enum WatchAppCatalog {
         guard let package = readString(bytes, &offset) else { return nil }
         let signLength = signatureLength(bytes)
         var version = ""
+        var iconName = "icon"
+        var media: [String: Range<Int>] = [:]
         while bytes.count - offset > signLength {
             guard let fileName = readString(bytes, &offset), let path = readString(bytes, &offset, allowEmpty: true),
                   offset + 8 <= bytes.count else { break }
@@ -44,14 +50,22 @@ enum WatchAppCatalog {
             offset += 8
             guard length >= 0, offset + length <= bytes.count else { break }
             if fileName == "config.json", path.isEmpty,
-               let json = try? JSONSerialization.jsonObject(with: Data(bytes[offset..<(offset + length)])) as? [String: Any],
-               let app = json["app"] as? [String: Any], let v = app["version"] as? [String: Any] {
-                version = v["name"] as? String ?? ""
+               let json = try? JSONSerialization.jsonObject(with: Data(bytes[offset..<(offset + length)])) as? [String: Any] {
+                if let app = json["app"] as? [String: Any], let v = app["version"] as? [String: Any] {
+                    version = v["name"] as? String ?? ""
+                }
+                // "icon": "$media:icon" names resources/base/media/icon.*
+                if let module = json["module"] as? [String: Any], let abilities = module["abilities"] as? [[String: Any]],
+                   let icon = abilities.first?["icon"] as? String, icon.hasPrefix("$media:") {
+                    iconName = String(icon.dropFirst("$media:".count))
+                }
             }
+            if path.hasSuffix("resources/base/media") { media[fileName] = offset..<(offset + length) }
             offset += length
         }
+        let icon = (media[iconName + ".png"] ?? media[iconName + ".bin"]).map { Array(bytes[$0]) }
         return BundledWatchApp(name: name, package: package, version: version, data: bytes,
-                               fingerprint: developerKey(bytes).map { package + "_" + $0 })
+                               fingerprint: developerKey(bytes).map { package + "_" + $0 }, icon: icon)
     }
 
     private static func readString(_ bytes: [UInt8], _ offset: inout Int, allowEmpty: Bool = false) -> String? {
@@ -91,5 +105,57 @@ enum WatchAppCatalog {
               let key = SecCertificateCopyKey(certificate),
               let external = SecKeyCopyExternalRepresentation(key, nil) as Data? else { return nil }
         return external.base64EncodedString()
+    }
+}
+
+// Watch apps added from Files (a signed .bin), so the prebuilt app can install them without a rebuild.
+// They are kept in Application Support and stay in the list after a restart until they are removed from it.
+enum ImportedWatchApps {
+    enum ImportError: LocalizedError {
+        case notWatchApp
+
+        var errorDescription: String? {
+            L("This is not a signed watch app (.bin from tools/build-watch-app.sh)",
+              "Bu imzalı bir saat uygulaması değil (tools/build-watch-app.sh ile derlenen .bin)")
+        }
+    }
+
+    private static var folder: URL {
+        URL.applicationSupportDirectory.appending(path: "ImportedWatchApps", directoryHint: .isDirectory)
+    }
+
+    static func load() -> [BundledWatchApp] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension == "bin" }.compactMap(read)
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    // Copies the picked file in; an older import of the same package is replaced
+    static func add(_ url: URL) throws -> BundledWatchApp {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        let name = url.deletingPathExtension().lastPathComponent
+        guard var app = WatchAppCatalog.parse([UInt8](data), name: name) else { throw ImportError.notWatchApp }
+        app.imported = true
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for old in load() where old.package == app.package || old.name == app.name { remove(old) }
+        try data.write(to: file(for: app), options: .atomic)
+        return app
+    }
+
+    static func remove(_ app: BundledWatchApp) {
+        try? FileManager.default.removeItem(at: file(for: app))
+    }
+
+    private static func file(for app: BundledWatchApp) -> URL {
+        folder.appending(path: app.name + ".bin")
+    }
+
+    private static func read(_ url: URL) -> BundledWatchApp? {
+        guard let data = try? Data(contentsOf: url),
+              var app = WatchAppCatalog.parse([UInt8](data), name: url.deletingPathExtension().lastPathComponent) else { return nil }
+        app.imported = true
+        return app
     }
 }
