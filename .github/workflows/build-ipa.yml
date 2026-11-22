@@ -1,5 +1,10 @@
 # Builds an UNSIGNED HuaSideload.ipa on a GitHub macOS runner. Sign it on Windows with Sideloadly.
 # No secrets, certificates or Apple ID are used or needed here.
+#
+# Run it by hand (Actions → Build unsigned IPA) for an IPA with your own bundle ID, or push a version tag to publish
+# a release: bump CFBundleShortVersionString in project.yml, then
+#   git tag -a v1.2 -F whats-new.md && git push origin v1.2
+# The annotated tag's message becomes the release notes (a plain tag gets GitHub's generated notes).
 name: Build unsigned IPA
 
 on:
@@ -9,9 +14,12 @@ on:
         description: "Bundle ID (make it unique, e.g. com.yourname.huasideload)"
         required: true
         default: "com.example.huasideload"
+  push:
+    tags: ["v*"]
 
 permissions:
-  contents: read
+  # write: a tag push creates the GitHub release
+  contents: write
 
 jobs:
   build:
@@ -40,7 +48,7 @@ jobs:
 
       - name: Generate Xcode project
         env:
-          HUASIDELOAD_BUNDLE_ID: ${{ inputs.bundle_id }}
+          HUASIDELOAD_BUNDLE_ID: ${{ inputs.bundle_id || 'com.example.huasideload' }}
           HUASIDELOAD_TEAM_ID: ""
         run: ./generate.sh
 
@@ -67,6 +75,33 @@ jobs:
           zip -qry HuaSideload-unsigned.ipa Payload
           shasum -a 256 HuaSideload-unsigned.ipa | tee HuaSideload-unsigned.ipa.sha256
           /usr/libexec/PlistBuddy -c Print "$APP/Info.plist" | tee info-plist.txt
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          BUILT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/Release-iphoneos/HuaSideload.app/Info.plist)
+          if [ "$BUILT" != "$VERSION" ]; then
+            echo "::error::Tag $TAG, but the app's version is $BUILT. Bump CFBundleShortVersionString in project.yml and tag again."
+            exit 1
+          fi
+          cp HuaSideload-unsigned.ipa "HuaSideload-$VERSION.ipa"
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          {
+            echo "Prebuilt, unsigned **HuaSideload.ipa**. Requires iOS 17. Install it with Sideloadly or AltStore using your own Apple ID (see the [README]($REPO_URL#3-install-the-iphone-app-and-pair-the-watch))."
+            echo
+            if [ "$(git cat-file -t "$TAG")" = tag ]; then git tag -l --format='%(contents)' "$TAG"; fi
+          } > notes.md
+          generated=""
+          if [ "$(git cat-file -t "$TAG")" != tag ]; then generated="--generate-notes"; fi
+          # shellcheck disable=SC2086
+          gh release create "$TAG" "HuaSideload-$VERSION.ipa" --verify-tag \
+            --title "HuaSideload $VERSION (prebuilt IPA)" --notes-file notes.md $generated
 
       - uses: actions/upload-artifact@v4
         with:
