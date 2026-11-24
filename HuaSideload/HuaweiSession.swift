@@ -198,6 +198,10 @@ final class HuaweiSession {
         if isPaired, packet.serviceId == WatchApps.serviceId, packet.commandId == WatchApps.installStatusCommand, let tlv = packet.tlv {
             let status = tlv.int(0x01) ?? -1
             let package = tlv.value(0x02).map { String(decoding: $0, as: UTF8.self) } ?? ""
+            // A failure, or anything beyond status + package, is logged raw: the watch may name the reason in another tag
+            if status == 103 || tlv.items.contains(where: { $0.tag != 0x01 && $0.tag != 0x02 }) {
+                log(.info, L("Install status packet (0x2A/0x02): ", "Kurulum durumu paketi (0x2A/0x02): ") + tlv.description)
+            }
             onAppInstallStatus?(status, package)
             return
         }

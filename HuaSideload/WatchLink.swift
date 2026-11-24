@@ -62,6 +62,8 @@ final class WatchLink: NSObject, ObservableObject {
     // The watch asks for song info by file name: file name -> (title, artist)
     private var musicMetadata: [String: (title: String, artist: String)] = [:]
     private var lastInstallStatus: Int?
+    // Highest install percent (0-100) the watch reported for the current install; tells which check a 103 came from
+    private var lastInstallPercent: Int?
 
     private let huaweiService = CBUUID(string: HuaweiUUID.service)
     private let writeUUID = CBUUID(string: HuaweiUUID.write)
@@ -120,6 +122,7 @@ final class WatchLink: NSObject, ObservableObject {
             let kind: LogKind = status == 102 ? .success : (status == 103 || status == 106 ? .error : .info)
             self?.append(kind, L("⌚ Watch: ", "⌚ Saat: ") + "\(WatchApps.describeStatus(status)) \(package)")
             self?.lastInstallStatus = status
+            if (0...100).contains(status) { self?.lastInstallPercent = max(self?.lastInstallPercent ?? 0, status) }
         }
         session.onAppMessage = { [weak self] source, data in
             guard let self else { return }
@@ -694,6 +697,7 @@ final class WatchLink: NSObject, ObservableObject {
                 self.append(.info, L("Watch app platform: ", "Saatin uygulama platformu: ") + WatchApps.describeParams(platform))
             }
             self.lastInstallStatus = nil
+            self.lastInstallPercent = nil
             try await session.uploadFile(app.data, name: app.package + "_INSTALL", type: FileUpload.FileType.app) { fraction in
                 self.watchAppProgress = fraction
             }
@@ -711,8 +715,7 @@ final class WatchLink: NSObject, ObservableObject {
                             : L("\(app.name) is not on the watch. For error 103 see README > Troubleshooting",
                                 "\(app.name) saatin listesinde yok. 103 hatası için README > Troubleshooting"))
                 // 103 wins: an older build of the same package may still be on the watch
-                let why103 = L("Usually the signing profile doesn't contain this watch's UDID, or version.code is not higher than the installed one.",
-                               "Genelde imza profilinde bu saatin UDID'si yoktur ya da version.code kurulu sürümden büyük değildir.")
+                let why103 = Self.installFailureHint(percent: self.lastInstallPercent)
                 if self.lastInstallStatus == 103 {
                     self.appInstallStatus = AppInstallStatus(text: L("The watch rejected \(app.name) (103)", "Saat \(app.name) uygulamasını reddetti (103)"), ok: false, hint: why103)
                 } else {
@@ -723,6 +726,22 @@ final class WatchLink: NSObject, ObservableObject {
                 // The list could not be read, but the watch reported the install itself
                 self.appInstallStatus = AppInstallStatus(text: L("\(app.name) installed", "\(app.name) kuruldu"), ok: true)
             }
+        }
+    }
+
+    // The OpenHarmony lite installer (gt_bundle_installer.cpp) reports 10% before the signature and profile check and 50%
+    // after it; the package content (config.json, icons, version) is checked after 50%.
+    static func installFailureHint(percent: Int?) -> String {
+        switch percent {
+        case .some(let p) where p < 50:
+            return L("It stopped at the signature check: most likely the profile doesn't contain this watch's UDID, the package name doesn't match the profile, or the certificate isn't accepted.",
+                     "İmza kontrolünde durdu: büyük ihtimalle profilde bu saatin UDID'si yok, paket adı profille uyuşmuyor ya da sertifika kabul edilmiyor.")
+        case .some:
+            return L("The signature was accepted; the watch rejected the package itself: config.json, the icons (icon_small too), a version.code that isn't higher than the installed one, or a different certificate than the installed build.",
+                     "İmza kabul edildi, saat paketin kendisini reddetti: config.json, simgeler (icon_small dahil), kurulu sürümden büyük olmayan bir version.code ya da kurulu sürümden farklı bir sertifika.")
+        case nil:
+            return L("Usually the signing profile doesn't contain this watch's UDID, or version.code is not higher than the installed one.",
+                     "Genelde imza profilinde bu saatin UDID'si yoktur ya da version.code kurulu sürümden büyük değildir.")
         }
     }
 

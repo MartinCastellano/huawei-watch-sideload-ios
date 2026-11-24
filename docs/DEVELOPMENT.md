@@ -162,11 +162,17 @@ parts of a song the watch mutes its mic on its own too.)
 All of these were found by testing on the watch. Most of them give no error message at all: just "103",
 a black screen or a frozen watch.
 
+For **103**, the last percent in the log tells which check failed. The OpenHarmony lite installer
+(`gt_bundle_installer.cpp`) reports 10% before the signature and profile check and 50% after it, so a 103 right after
+10% means the signature or profile was refused, and a 103 after 50% means the package content was. The app logs the
+watch's whole 103 packet.
+
 | Symptom | Cause | Fix |
 |---|---|---|
-| Install fails with **103** | no `icon_small.bin` in the icon folder | add `resources/base/media/icon_small.png` (41×41) |
-| Install fails with **103** | your watch's UDID is not in the profile / wrong package name / wrong certificate | check 2.1; `tools/check-watch-bin.py` inspects the package |
-| Install fails with **103** | `version.code` is not higher than the installed version | increase it |
+| Install fails with **103** right after 10% | your watch's UDID is not in the profile / wrong package name / wrong certificate | check 2.1; `tools/check-watch-bin.py` inspects the package |
+| Install fails with **103** after 50% | no `icon_small.bin` in the icon folder | add `resources/base/media/icon_small.png` (41×41) |
+| Install fails with **103** after 50% | `version.code` is not higher than the installed version | increase it |
+| Install fails with **103** after 50% | updating an app that was signed with another certificate | remove the installed one first |
 | **Black screen** at launch | `import x from '@system.wearengine'` (not known to the OpenHarmony compiler; webpack emits code that throws at runtime) | load it with `requireModule('@system.wearengine')` inside try/catch (`bridge.js` does this). The build tool stops on `COMPILE RESULT:FAIL` |
 | Watch **freezes** at launch | starting the phone connection on the very first page at launch | a plain splash page (`pages/index`) + `router.replace` to the real page, connect there |
 | Watch **freezes** at launch | `config.json` → `module.metaData` → `supportLists` | leave it out; messaging works without it |
