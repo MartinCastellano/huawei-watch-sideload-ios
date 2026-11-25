@@ -77,6 +77,7 @@ implementation. The app UI is available in **English and Turkish** (globe menu, 
 | HUAWEI WATCH GT 3 | – | Custom watch face | iOS 26.6.1 | [#5](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues/5) |
 | HUAWEI WATCH GT 4 | 5.0.0.88 | Custom watch face | Needs the account setup (4.6) | [#6](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues/6) |
 | HUAWEI Band 11 | 6.0.0.130 | Custom watch face (two bands) | Needs the account setup (4.6) | [#4](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues/4) |
+| HUAWEI WATCH FIT 4 / FIT 4 Pro | 6.1.0.117 | Pairing, watch info, file upload. **App install fails** (103 at 10%) | See the HarmonyOS 6.1 note in section 5 | [#7](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues/7) |
 | HUAWEI WATCH GT 2 Pro | – | Pairing, watch info, P2P messages to a watch app | Uses HiChain Lite pairing (experimental), added by [huydung1232007](https://github.com/huydung1232007/huawei-watch-sideload-ios) | Fork owner's tester |
 
 Other Huawei *lite wearable* watches on the same platform (GT 2, …) will likely work but are untested.
@@ -209,6 +210,7 @@ Both are made for 466×466 round screens (tested on a GT 3 SE).
 - **Watch speaker: "not connected to the iPhone for calls":** in the iPhone's Bluetooth settings, tap the watch to connect it; calls must ring on the watch.
 - **Questions and bug reports:** [GitHub Issues](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues). Attach the log.
 - **Sharing the log:** **Copy** on the **Log** tab. Identity details stay masked unless **Show identity** is on.
+- **HarmonyOS 6.1 watches (Watch Fit 4 / Fit 4 Pro on 6.1.0.117): watch app install fails with 103 at 10%:** a known open problem, not your certificate. Two testers with correctly signed apps and matching UDIDs hit the same failure. On 6.1 Huawei also requires a server-side signature for watch faces ([Gadgetbridge #6005](https://codeberg.org/Freeyourgadget/Gadgetbridge/issues/6005)); whether apps need one too is being checked in [#7](https://github.com/burak4arslan/huawei-watch-sideload-ios/issues/7).
 - **Your own watch apps** (install fails with 103, "Could not reach the phone", live log on a Mac): see the
   [developer guide's troubleshooting](docs/DEVELOPMENT.md#5-troubleshooting-for-developers).
 
